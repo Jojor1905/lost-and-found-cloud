@@ -5,21 +5,35 @@ import "./App.css";
 const API_URL =
   "https://ltayb90q72.execute-api.us-east-1.amazonaws.com/items";
 
+const initialForm = {
+  name: "",
+  type: "LOST",
+  location: "",
+  description: "",
+};
+
+function normalizeItem(item) {
+  return {
+    id: item.itemId,
+    name: item.itemName || "",
+    type: item.type || "LOST",
+    location: item.location || "",
+    description: item.description || "",
+  };
+}
+
 function App() {
-  const [cloudItems, setCloudItems] = useState([]);
-  const [demoItems, setDemoItems] = useState([]);
+  const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
+  const [form, setForm] = useState(initialForm);
+
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
   const [error, setError] = useState("");
+  const [submitMessage, setSubmitMessage] = useState("");
 
-  const [form, setForm] = useState({
-    name: "",
-    type: "LOST",
-    location: "",
-    description: "",
-  });
-
-  // Load real items from AWS
+  // GET: Load items from AWS DynamoDB
   useEffect(() => {
     const controller = new AbortController();
 
@@ -34,7 +48,9 @@ function App() {
         });
 
         if (!response.ok) {
-          throw new Error(`API Error: ${response.status}`);
+          throw new Error(
+            `Failed to load items: ${response.status}`
+          );
         }
 
         const data = await response.json();
@@ -43,19 +59,10 @@ function App() {
           throw new Error("Invalid API response");
         }
 
-        const normalizedItems = data.items.map((item) => ({
-          id: item.itemId,
-          name: item.itemName || "",
-          type: item.type || "LOST",
-          location: item.location || "",
-          description: item.description || "",
-          isDemo: false,
-        }));
-
-        setCloudItems(normalizedItems);
+        setItems(data.items.map(normalizeItem));
       } catch (err) {
         if (err.name !== "AbortError") {
-          console.error("Failed to load items:", err);
+          console.error("GET API Error:", err);
           setError("Unable to load items from AWS.");
         }
       } finally {
@@ -70,83 +77,147 @@ function App() {
     return () => controller.abort();
   }, []);
 
-  // Temporary frontend-only demo
-  function handleSubmit(e) {
+  // POST: Save new item to AWS DynamoDB
+  async function handleSubmit(e) {
     e.preventDefault();
 
-    if (!form.name.trim()) return;
+    if (!form.name.trim() || submitting) return;
 
-    const newItem = {
-      id: crypto.randomUUID(),
-      ...form,
-      isDemo: true,
-    };
+    setSubmitting(true);
+    setSubmitMessage("");
 
-    setDemoItems((prev) => [newItem, ...prev]);
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          itemName: form.name.trim(),
+          type: form.type,
+          location: form.location.trim(),
+          description: form.description.trim(),
+        }),
+      });
 
-    setForm({
-      name: "",
-      type: "LOST",
-      location: "",
-      description: "",
-    });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to create item"
+        );
+      }
+
+      if (!data.item?.itemId) {
+        throw new Error("Invalid API response");
+      }
+
+      // Display the item immediately
+      setItems((prev) => [
+        normalizeItem(data.item),
+        ...prev.filter(
+          (item) => item.id !== data.item.itemId
+        ),
+      ]);
+
+      // Reset form
+      setForm({ ...initialForm });
+
+      setSubmitMessage(
+        "Item saved to AWS successfully!"
+      );
+    } catch (err) {
+      console.error("POST API Error:", err);
+      setSubmitMessage(
+        "Unable to confirm that the item was saved. Refresh the list before trying again."
+      );
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  const items = [...demoItems, ...cloudItems];
-
+  // Search items
   const filteredItems = items.filter((item) =>
-    item.name.toLowerCase().includes(search.toLowerCase())
+    item.name
+      .toLowerCase()
+      .includes(search.toLowerCase())
   );
 
   return (
     <main className="container">
       <header>
         <h1>Lost and Found</h1>
-        <p>Cloud-Based Lost and Found Management System</p>
+        <p>
+          Cloud-Based Lost and Found Management System
+        </p>
       </header>
 
+      {/* Report Item Form */}
       <section className="card">
         <h2>Report an Item</h2>
 
         <p>
-          Demo mode: New items are stored temporarily in
-          your browser until cloud submission is enabled.
+          New items will be saved to AWS DynamoDB.
         </p>
 
         <form onSubmit={handleSubmit}>
-          <label>Item Name</label>
+          <label htmlFor="itemName">
+            Item Name
+          </label>
           <input
+            id="itemName"
             required
+            maxLength={100}
             placeholder="e.g. Black Wallet"
             value={form.name}
             onChange={(e) =>
-              setForm({ ...form, name: e.target.value })
+              setForm({
+                ...form,
+                name: e.target.value,
+              })
             }
           />
 
-          <label>Type</label>
+          <label htmlFor="itemType">
+            Type
+          </label>
           <select
+            id="itemType"
             value={form.type}
             onChange={(e) =>
-              setForm({ ...form, type: e.target.value })
+              setForm({
+                ...form,
+                type: e.target.value,
+              })
             }
           >
             <option value="LOST">Lost</option>
             <option value="FOUND">Found</option>
           </select>
 
-          <label>Location</label>
+          <label htmlFor="itemLocation">
+            Location
+          </label>
           <input
+            id="itemLocation"
+            maxLength={200}
             placeholder="e.g. University Library"
             value={form.location}
             onChange={(e) =>
-              setForm({ ...form, location: e.target.value })
+              setForm({
+                ...form,
+                location: e.target.value,
+              })
             }
           />
 
-          <label>Description</label>
+          <label htmlFor="itemDescription">
+            Description
+          </label>
           <textarea
+            id="itemDescription"
             rows="3"
+            maxLength={1000}
             placeholder="Item details..."
             value={form.description}
             onChange={(e) =>
@@ -157,47 +228,67 @@ function App() {
             }
           />
 
-          <button type="submit">Add Demo Item</button>
+          <button
+            type="submit"
+            disabled={submitting}
+          >
+            {submitting ? "Saving..." : "Add Item"}
+          </button>
+
+          {submitMessage && (
+            <p role="status">
+              {submitMessage}
+            </p>
+          )}
         </form>
       </section>
 
+      {/* Items List */}
       <section className="card">
         <h2>Lost & Found Items</h2>
 
-        {loading && <p>Loading items from AWS...</p>}
-
-        {error && <p role="alert">{error}</p>}
-
         <input
+          aria-label="Search items"
           placeholder="Search items..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) =>
+            setSearch(e.target.value)
+          }
         />
 
+        {loading && (
+          <p>Loading items from AWS...</p>
+        )}
+
+        {error && (
+          <p role="alert">{error}</p>
+        )}
+
         <div className="item-list">
-          {filteredItems.map((item) => (
-            <article key={item.id} className="item">
-              <div className="item-header">
-                <h3>{item.name}</h3>
+          {!loading &&
+            filteredItems.map((item) => (
+              <article
+                key={item.id}
+                className="item"
+              >
+                <div className="item-header">
+                  <h3>{item.name}</h3>
 
-                <span
-                  className={`tag ${item.type.toLowerCase()}`}
-                >
-                  {item.type}
-                </span>
-              </div>
+                  <span
+                    className={`tag ${item.type.toLowerCase()}`}
+                  >
+                    {item.type}
+                  </span>
+                </div>
 
-              <p>
-                <strong>Location:</strong> {item.location}
-              </p>
+                <p>
+                  <strong>Location:</strong>{" "}
+                  {item.location}
+                </p>
 
-              <p>{item.description}</p>
-
-              {item.isDemo && (
-                <p>Demo only - not saved to AWS</p>
-              )}
-            </article>
-          ))}
+                <p>{item.description}</p>
+              </article>
+            ))}
 
           {!loading &&
             !error &&
