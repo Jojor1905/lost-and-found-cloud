@@ -1,574 +1,69 @@
-
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-// ==========================================
-// 1. AWS API CONFIGURATION
-// ==========================================
+const API = import.meta.env.VITE_API_BASE_URL || "https://ltayb90q72.execute-api.us-east-1.amazonaws.com";
+const ITEMS_URL = `${API}/items`, MATCHES_URL = `${API}/matches`, UPLOAD_URL = `${API}/upload-url`;
+const MAX_IMAGE_SIZE = 2 * 1024 * 1024, ALLOWED = ["image/jpeg", "image/png", "image/webp"];
+const blankForm = { name: "", type: "LOST", location: "", description: "" };
 
-const API_BASE =
-  "https://ltayb90q72.execute-api.us-east-1.amazonaws.com";
+function Icon({ children }) { return <span className="icon" aria-hidden="true">{children}</span>; }
+function normalize(item = {}) { return { id: item.itemId, name: item.itemName || "Unnamed item", type: item.type === "FOUND" ? "FOUND" : "LOST", location: item.location || "Location not provided", description: item.description || "No additional details provided.", imageKey: item.imageKey, imageUrl: item.imageUrl, createdAt: item.createdAt }; }
+async function json(response) { let data; try { data = await response.json(); } catch { throw new Error(`Request failed: ${response.status}`); } if (!response.ok) throw new Error(data.message || `Request failed: ${response.status}`); return data; }
+function date(value) { return value && !Number.isNaN(new Date(value).getTime()) ? new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(value)) : "Recently reported"; }
 
-const ITEMS_URL = `${API_BASE}/items`;
-const UPLOAD_URL = `${API_BASE}/upload-url`;
+function ItemImage({ item, small = false }) {
+  const [broken, setBroken] = useState(false);
+  return item.imageUrl && !broken ? <img className={small ? "item-image small" : "item-image"} src={item.imageUrl} alt={item.name} loading="lazy" onError={() => setBroken(true)} /> : <div className={small ? "image-fallback small" : "image-fallback"} aria-label="No image available"><Icon>▧</Icon></div>;
+}
+function ItemCard({ item }) { return <article className="item-card"><ItemImage item={item} /><div className="item-body"><div className="item-meta"><span className={`badge ${item.type.toLowerCase()}`}>{item.type}</span><span>{date(item.createdAt)}</span></div><h3>{item.name}</h3><p className="location">⌖ {item.location}</p><p className="description">{item.description}</p></div></article>; }
+function Empty({ title, text, action }) { return <div className="empty"><div className="empty-icon">□</div><h3>{title}</h3><p>{text}</p>{action}</div>; }
+function Skeletons({ matches = false }) { return <div className={matches ? "match-list" : "item-grid"}>{[1, 2, 3].map((x) => <div className={matches ? "skeleton match-skeleton" : "skeleton"} key={x}><i /><b /><b /><b /></div>)}</div>; }
 
-const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
+function Header({ page, navigate }) {
+  const [open, setOpen] = useState(false); const links = [["home", "Home"], ["browse", "Browse Items"], ["matches", "Possible Matches"], ["report", "Report Item"]];
+  const go = (p) => { navigate(p); setOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  return <header className="header"><nav className="container nav"><button className="logo" onClick={() => go("home")}><span>⌕</span>FindBack</button><button className="menu" aria-label="Toggle navigation" onClick={() => setOpen(!open)}>{open ? "×" : "☰"}</button><div className={`links ${open ? "open" : ""}`}>{links.map(([key, label]) => <button className={page === key ? "active" : ""} onClick={() => go(key)} key={key}>{label}</button>)}</div><button className="nav-cta" onClick={() => go("report")}>＋ Report item</button></nav></header>;
+}
+function Footer({ navigate }) { return <footer><div className="container footer"><button className="logo" onClick={() => navigate("home")}><span>⌕</span>FindBack</button><p>Helping campus communities reconnect with what matters.</p><small>© {new Date().getFullYear()} FindBack</small></div></footer>; }
 
-const ALLOWED_IMAGE_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
-
-const initialForm = {
-  name: "",
-  type: "LOST",
-  location: "",
-  description: "",
-};
-
-// ==========================================
-// 2. HELPERS
-// ==========================================
-
-function normalizeItem(item) {
-  return {
-    id: item.itemId,
-    name: item.itemName || "",
-    type: item.type || "LOST",
-    location: item.location || "",
-    description: item.description || "",
-    imageKey: item.imageKey || null,
-    imageUrl: item.imageUrl || null,
-  };
+function Home({ items, status, navigate, retry }) {
+  const [query, setQuery] = useState(""); const recent = [...items].sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0,3);
+  const lost = items.filter(x => x.type === "LOST").length, found = items.filter(x => x.type === "FOUND").length;
+  return <><section className="hero"><div className="container hero-grid"><div><span className="eyebrow">Campus lost & found, made simple</span><h1>Lost something?<br /><em>Let’s find it together.</em></h1><p>FindBack makes it easy for students and campus teams to report items, discover what’s been found, and reconnect people with their belongings.</p><form className="hero-search" onSubmit={(e) => { e.preventDefault(); navigate("browse", query); }}><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search for a backpack, keys, notebook..." aria-label="Search items" /><button aria-label="Search">→</button></form><div className="actions"><button className="button primary" onClick={() => navigate("report")}>＋ Report lost item</button><button className="button secondary" onClick={() => navigate("browse")}>Browse found items →</button></div></div><div className="hero-art" aria-hidden="true"><div className="ring one" /><div className="ring two" /><div className="art-card"><span className="badge found">FOUND</span><div className="art-icon">▧</div><b>Blue backpack</b><small>⌖ Student Center</small></div><div className="match-tip"><i /> Possible match found</div></div></div></section>
+  <section className="stats"><div className="container stats-grid">{[[status.loading ? "—" : items.length, "Total reported items", "▧"], [status.loading ? "—" : lost, "Lost items", "⌕"], [status.loading ? "—" : found, "Found items", "✓"], [status.matchCount === null ? "—" : status.matchCount, "Possible matches", "↔"]].map(([number,label,icon]) => <div key={label}><span>{icon}</span><strong>{number}</strong><p>{label}</p></div>)}</div></section>
+  <section className="section container"><div className="section-head"><div><span className="eyebrow">Recently reported</span><h2>Items that need a way back</h2></div><button className="text-button" onClick={() => navigate("browse")}>View all items →</button></div>{status.loading ? <Skeletons /> : status.error ? <Empty title="We couldn’t load items" text="Check your connection and try again." action={<button className="button secondary" onClick={retry}>Try again</button>} /> : recent.length ? <div className="item-grid">{recent.map(item => <ItemCard item={item} key={item.id} />)}</div> : <Empty title="No items reported yet" text="The first report could reconnect someone with what they lost." action={<button className="button primary" onClick={() => navigate("report")}>Report an item</button>} />}</section>
+  <section className="how"><div className="container"><div className="how-head"><span className="eyebrow">How FindBack works</span><h2>A clearer path from missing to found</h2><p>Three simple steps that help the right item find the right person.</p></div><div className="steps">{[["01","Report","Share a few details about an item you lost or found, with an optional photo."],["02","Match","Our system looks for similar reports and surfaces potential matches for review."],["03","Reconnect","Campus staff can verify the details and help guide the item back to its owner."]].map(([num,title,text]) => <div key={num}><span>{num}</span><h3>{title}</h3><p>{text}</p></div>)}</div></div></section></>;
 }
 
-async function readApiResponse(response) {
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      data.message || `Request failed: ${response.status}`
-    );
-  }
-
-  return data;
+function Browse({ items, status, retry, startQuery }) {
+  const [query, setQuery] = useState(startQuery || ""), [type, setType] = useState("ALL"), [sort, setSort] = useState("newest");
+  const results = useMemo(() => [...items].filter(item => (type === "ALL" || item.type === type) && `${item.name} ${item.location} ${item.description}`.toLowerCase().includes(query.toLowerCase())).sort((a,b) => sort === "newest" ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0) : new Date(a.createdAt || 0) - new Date(b.createdAt || 0)), [items, query, type, sort]);
+  return <main className="page container"><div className="intro"><span className="eyebrow">Item directory</span><h1>Browse reported items</h1><p>Search lost and found reports shared by your campus community.</p></div><div className="toolbar"><label className="search"><span>⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search items, locations, or details" /></label><div className="toolbar-controls"><div className="tabs">{[["ALL","All"],["LOST","Lost"],["FOUND","Found"]].map(([value,label]) => <button className={type===value ? "selected" : ""} onClick={() => setType(value)} key={value}>{label}</button>)}</div><label className="sort">Sort <select value={sort} onChange={e => setSort(e.target.value)}><option value="newest">Newest</option><option value="oldest">Oldest</option></select></label></div></div><p className="results">{status.loading ? "Loading reports…" : `${results.length} ${results.length === 1 ? "item" : "items"} found`}</p>{status.loading ? <Skeletons /> : status.error ? <Empty title="We couldn’t load items" text="There was a problem reaching the item directory." action={<button className="button primary" onClick={retry}>Retry</button>} /> : results.length ? <div className="item-grid">{results.map(item => <ItemCard item={item} key={item.id} />)}</div> : <Empty title="No matching items" text="Try a different search term or clear the filters." action={(query || type !== "ALL") && <button className="button secondary" onClick={() => {setQuery("");setType("ALL");}}>Clear filters</button>} />}</main>;
 }
 
-// ==========================================
-// 3. APP COMPONENT
-// ==========================================
-
-function App() {
-  const [items, setItems] = useState([]);
-  const [search, setSearch] = useState("");
-  const [form, setForm] = useState(initialForm);
-
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-
-  const [error, setError] = useState("");
-  const [submitMessage, setSubmitMessage] = useState("");
-  const [uploadProgress, setUploadProgress] = useState("");
-
-  const fileInputRef = useRef(null);
-
-  // ========================================
-  // 4. LOAD ITEMS FROM DYNAMODB
-  // ========================================
-
-  async function loadItems(signal) {
-    try {
-      setLoading(true);
-      setError("");
-
-      const response = await fetch(ITEMS_URL, {
-        method: "GET",
-        signal,
-      });
-
-      const data = await readApiResponse(response);
-
-      if (!Array.isArray(data.items)) {
-        throw new Error("Invalid API response");
-      }
-
-      setItems(data.items.map(normalizeItem));
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        console.error("GET API Error:", err);
-        setError("Unable to load items from AWS.");
-      }
-    } finally {
-      if (!signal?.aborted) {
-        setLoading(false);
-      }
-    }
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    loadItems(controller.signal);
-
-    return () => controller.abort();
-  }, []);
-
-  // ========================================
-  // 5. SELECT IMAGE & PREVIEW
-  // ========================================
-
-  useEffect(() => {
-    if (!imageFile) {
-      setImagePreview(null);
-      return;
-    }
-
-    const previewUrl = URL.createObjectURL(imageFile);
-    setImagePreview(previewUrl);
-
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [imageFile]);
-
-  function handleImageChange(event) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      setImageFile(null);
-      return;
-    }
-
-    setSubmitMessage("");
-
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      setSubmitMessage(
-        "Only JPG, PNG and WebP images are allowed."
-      );
-
-      event.target.value = "";
-      setImageFile(null);
-      return;
-    }
-
-    if (file.size === 0 || file.size > MAX_IMAGE_SIZE) {
-      setSubmitMessage(
-        "Image must be smaller than 2 MB."
-      );
-
-      event.target.value = "";
-      setImageFile(null);
-      return;
-    }
-
-    setImageFile(file);
-  }
-
-  function removeImage() {
-    setImageFile(null);
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  }
-
-  // ========================================
-  // 6. REQUEST PRESIGNED POST
-  // ========================================
-
-  async function requestUploadForm(contentType) {
-    const response = await fetch(UPLOAD_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contentType,
-      }),
-    });
-
-    const data = await readApiResponse(response);
-
-    if (
-      !data.uploadUrl ||
-      !data.fields ||
-      !data.imageKey
-    ) {
-      throw new Error("Invalid upload response");
-    }
-
-    return data;
-  }
-
-  // ========================================
-  // 7. UPLOAD IMAGE TO AMAZON S3
-  // ========================================
-
-  async function uploadImageToS3(file) {
-    setUploadProgress("Requesting upload permission...");
-
-    const uploadData = await requestUploadForm(file.type);
-
-    const formData = new FormData();
-
-    // Add all AWS-required signed fields
-    Object.entries(uploadData.fields).forEach(
-      ([key, value]) => {
-        formData.append(key, value);
-      }
-    );
-
-    // File must be added after the signed fields
-    formData.append("file", file);
-
-    setUploadProgress("Uploading image to Amazon S3...");
-
-    const response = await fetch(uploadData.uploadUrl, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `S3 upload failed: ${response.status}`
-      );
-    }
-
-    return uploadData.imageKey;
-  }
-
-  // ========================================
-  // 8. SUBMIT ITEM TO DYNAMODB
-  // ========================================
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-
-    if (!form.name.trim() || submitting) {
-      return;
-    }
-
-    setSubmitting(true);
-    setSubmitMessage("");
-    setUploadProgress("");
-
-    let imageKey = null;
-
-    try {
-      // Step 1: Upload image if selected
-      if (imageFile) {
-        imageKey = await uploadImageToS3(imageFile);
-      }
-
-      // Step 2: Save item in DynamoDB
-      setUploadProgress("Saving item to DynamoDB...");
-
-      const payload = {
-        itemName: form.name.trim(),
-        type: form.type,
-        location: form.location.trim(),
-        description: form.description.trim(),
-      };
-
-      if (imageKey) {
-        payload.imageKey = imageKey;
-      }
-
-      const response = await fetch(ITEMS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await readApiResponse(response);
-
-      if (!data.item?.itemId) {
-        throw new Error("Invalid item response");
-      }
-
-      // Step 3: Update items list
-      setItems((previousItems) => [
-        normalizeItem(data.item),
-        ...previousItems.filter(
-          (item) => item.id !== data.item.itemId
-        ),
-      ]);
-
-      // Step 4: Reset form
-      setForm({ ...initialForm });
-      removeImage();
-
-      setSubmitMessage(
-        "Item and image saved to AWS successfully!"
-      );
-
-      setUploadProgress("");
-    } catch (err) {
-      console.error("Submit Error:", err);
-
-      if (err.message === "Image upload is disabled") {
-        setSubmitMessage(
-          "Image upload is disabled. Please try again during the demo."
-        );
-      } else {
-        setSubmitMessage(
-          `Unable to complete the request: ${err.message}. Check the list before retrying.`
-        );
-      }
-
-      setUploadProgress("");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  // ========================================
-  // 9. SEARCH ITEMS
-  // ========================================
-
-  const filteredItems = items.filter((item) =>
-    item.name
-      .toLowerCase()
-      .includes(search.toLowerCase())
-  );
-
-  // ========================================
-  // 10. USER INTERFACE
-  // ========================================
-
-  return (
-    <main className="container">
-      <header>
-        <h1>Lost and Found</h1>
-        <p>
-          Cloud-Based Lost and Found Management System
-        </p>
-      </header>
-
-      {/* REPORT ITEM FORM */}
-      <section className="card">
-        <h2>Report an Item</h2>
-
-        <p>
-          Report lost or found items. Images are
-          stored securely in Amazon S3.
-        </p>
-
-        <form onSubmit={handleSubmit}>
-          <label htmlFor="itemName">
-            Item Name
-          </label>
-
-          <input
-            id="itemName"
-            required
-            maxLength={100}
-            placeholder="e.g. Black Wallet"
-            value={form.name}
-            onChange={(event) =>
-              setForm({
-                ...form,
-                name: event.target.value,
-              })
-            }
-          />
-
-          <label htmlFor="itemType">
-            Type
-          </label>
-
-          <select
-            id="itemType"
-            value={form.type}
-            onChange={(event) =>
-              setForm({
-                ...form,
-                type: event.target.value,
-              })
-            }
-          >
-            <option value="LOST">Lost</option>
-            <option value="FOUND">Found</option>
-          </select>
-
-          <label htmlFor="itemLocation">
-            Location
-          </label>
-
-          <input
-            id="itemLocation"
-            maxLength={200}
-            placeholder="e.g. University Library"
-            value={form.location}
-            onChange={(event) =>
-              setForm({
-                ...form,
-                location: event.target.value,
-              })
-            }
-          />
-
-          <label htmlFor="itemDescription">
-            Description
-          </label>
-
-          <textarea
-            id="itemDescription"
-            rows="3"
-            maxLength={1000}
-            placeholder="Item details..."
-            value={form.description}
-            onChange={(event) =>
-              setForm({
-                ...form,
-                description: event.target.value,
-              })
-            }
-          />
-
-          {/* IMAGE UPLOAD */}
-          <label htmlFor="itemImage">
-            Item Image (Optional)
-          </label>
-
-          <input
-            id="itemImage"
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={handleImageChange}
-          />
-
-          <p style={{ fontSize: "0.85rem" }}>
-            Supported: JPG, PNG, WebP (max 2 MB)
-          </p>
-
-          {/* IMAGE PREVIEW */}
-          {imagePreview && (
-            <div style={{ marginTop: "12px" }}>
-              <img
-                src={imagePreview}
-                alt="Selected item preview"
-                style={{
-                  width: "100%",
-                  maxWidth: "320px",
-                  maxHeight: "240px",
-                  objectFit: "contain",
-                  borderRadius: "10px",
-                  border: "1px solid #ddd",
-                }}
-              />
-
-              <div style={{ marginTop: "10px" }}>
-                <button
-                  type="button"
-                  onClick={removeImage}
-                  disabled={submitting}
-                >
-                  Remove Image
-                </button>
-              </div>
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={submitting}
-          >
-            {submitting ? "Saving..." : "Add Item"}
-          </button>
-
-          {uploadProgress && (
-            <p role="status">
-              {uploadProgress}
-            </p>
-          )}
-
-          {submitMessage && (
-            <p role="status">
-              {submitMessage}
-            </p>
-          )}
-        </form>
-      </section>
-
-      {/* LOST AND FOUND ITEMS */}
-      <section className="card">
-        <h2>Lost &amp; Found Items</h2>
-
-        <input
-          aria-label="Search items"
-          placeholder="Search items..."
-          value={search}
-          onChange={(event) =>
-            setSearch(event.target.value)
-          }
-        />
-
-        {loading && (
-          <p>Loading items from AWS...</p>
-        )}
-
-        {error && (
-          <p role="alert">{error}</p>
-        )}
-
-        <div className="item-list">
-          {!loading &&
-            filteredItems.map((item) => (
-              <article
-                key={item.id}
-                className="item"
-              >
-                <div className="item-header">
-                  <h3>{item.name}</h3>
-
-                  <span
-                    className={`tag ${item.type.toLowerCase()}`}
-                  >
-                    {item.type}
-                  </span>
-                </div>
-
-                {/* S3 IMAGE */}
-                {item.imageUrl && (
-                  <img
-                    src={item.imageUrl}
-                    alt={item.name}
-                    loading="lazy"
-                    style={{
-                      width: "100%",
-                      maxWidth: "320px",
-                      maxHeight: "240px",
-                      objectFit: "cover",
-                      borderRadius: "10px",
-                      marginBottom: "12px",
-                    }}
-                  />
-                )}
-
-                <p>
-                  <strong>Location:</strong>{" "}
-                  {item.location}
-                </p>
-
-                <p>{item.description}</p>
-              </article>
-            ))}
-
-          {!loading &&
-            !error &&
-            filteredItems.length === 0 && (
-              <p>No items found.</p>
-            )}
-        </div>
-      </section>
-    </main>
-  );
+function Report({ created }) {
+  const [form, setForm] = useState(blankForm), [file, setFile] = useState(null), [preview, setPreview] = useState(null), [message, setMessage] = useState(""), [progress, setProgress] = useState(""), [submitting, setSubmitting] = useState(false); const fileInput = useRef(null);
+  const update = (key, value) => setForm(current => ({...current, [key]: value})); const remove = () => { if (preview) URL.revokeObjectURL(preview); setPreview(null); setFile(null); if(fileInput.current) fileInput.current.value = "";};
+  const selectFile = (e) => { const next = e.target.files?.[0]; if (!next) return; setMessage(""); if(!ALLOWED.includes(next.type)) {setMessage("Please choose a JPG, PNG, or WebP image.");e.target.value="";return;} if(!next.size || next.size > MAX_IMAGE_SIZE) {setMessage("Image must be no larger than 2 MB.");e.target.value="";return;} if (preview) URL.revokeObjectURL(preview); setFile(next); setPreview(URL.createObjectURL(next)); };
+  // Exact original workflow: contentType request; all signed fields before file in multipart form; return imageKey.
+  const requestUploadForm = async (contentType) => { const response = await fetch(UPLOAD_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contentType})}); const data = await json(response); if(!data.uploadUrl || !data.fields || !data.imageKey) throw new Error("Invalid upload response"); return data; };
+  const upload = async (image) => { setProgress("Requesting upload permission…"); const uploadData = await requestUploadForm(image.type); const body = new FormData(); Object.entries(uploadData.fields).forEach(([key,value]) => body.append(key,value)); body.append("file",image); setProgress("Uploading image securely…"); const response = await fetch(uploadData.uploadUrl,{method:"POST",body}); if(!response.ok) throw new Error(`S3 upload failed: ${response.status}`); return uploadData.imageKey; };
+  const submit = async e => { e.preventDefault(); if(submitting) return; if(!form.name.trim()) {setMessage("Please enter an item name.");return;} setSubmitting(true);setMessage("");setProgress(""); try { const imageKey = file ? await upload(file) : null; setProgress("Saving your report…"); const payload = {itemName:form.name.trim(),type:form.type,location:form.location.trim(),description:form.description.trim()}; if(imageKey) payload.imageKey=imageKey; const data = await json(await fetch(ITEMS_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})); if(!data.item?.itemId) throw new Error("Invalid item response"); setForm(blankForm);remove();setMessage("Your item has been reported successfully. It is now visible in the item directory.");created(normalize(data.item)); } catch(err) { console.error("Submit Error:",err); setMessage(err.message === "Image upload is disabled" || String(err.message).includes("403") ? "Image upload is currently unavailable. Your report was not submitted; please try again later or submit without an image." : `We couldn’t complete your report: ${err.message}. Please check the directory before retrying.`); } finally {setProgress("");setSubmitting(false);} };
+  return <main className="page report-page container"><div className="report-copy"><span className="eyebrow">Help bring it back</span><h1>Report an item</h1><p>Tell the community what you lost or found. Clear details make it much easier to identify a match.</p><div className="note"><b>✓</b><p><strong>Photos help, but they’re optional</strong><br />Use a clear image of the item—JPG, PNG, or WebP up to 2 MB.</p></div></div><section className="form-card"><form onSubmit={submit} noValidate><h2>Item details</h2><p className="form-help">Fields marked with * are required.</p><label>What is the item? <i>*</i><input required value={form.name} maxLength="100" onChange={e=>update("name",e.target.value)} placeholder="e.g. Black wallet, blue water bottle" /></label><div className="form-row"><label>I’m reporting a <i>*</i><select value={form.type} onChange={e=>update("type",e.target.value)}><option value="LOST">Lost item</option><option value="FOUND">Found item</option></select></label><label>Where was it last seen?<input value={form.location} maxLength="200" onChange={e=>update("location",e.target.value)} placeholder="e.g. University Library" /></label></div><label>Description<textarea rows="4" value={form.description} maxLength="1000" onChange={e=>update("description",e.target.value)} placeholder="Color, brand, distinctive details, or where it was found…" /></label><label>Photo <small>(optional)</small>{preview ? <div className="preview"><img src={preview} alt="Selected item preview" /><p><strong>{file?.name}</strong><br /><small>{Math.round((file?.size || 0)/1024)} KB · Ready to upload</small><br /><button type="button" onClick={remove} disabled={submitting}>Remove image</button></p></div> : <span className="drop"><b>⇧</b><strong>Upload a photo</strong><small>JPG, PNG, or WebP · Max 2 MB</small><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectFile} /></span>}</label>{progress && <p className="status" role="status">{progress}</p>}{message && <p className={`status ${message.startsWith("Your") ? "success" : "error"}`} role="status">{message}</p>}<button className="button primary submit" disabled={submitting}>{submitting ? "Submitting report…" : "Submit report →"}</button></form></section></main>;
 }
 
-export default App;
+function MatchCard({ match }) { const score = Math.max(0,Math.min(100,Number(match.score)||0)), lost=normalize(match.lostItem),found=normalize(match.foundItem); return <article className="match-card"><div className="match-items"><div className="match-item"><span className="badge lost">LOST</span><ItemImage item={lost} small /><div><h3>{lost.name}</h3><p>⌖ {lost.location}</p><small>{lost.description}</small></div></div><div className="arrows">↔</div><div className="match-item"><span className="badge found">FOUND</span><ItemImage item={found} small /><div><h3>{found.name}</h3><p>⌖ {found.location}</p><small>{found.description}</small></div></div></div><div className="score"><div><span>Matching score</span><strong>{score.toFixed(score % 1 ? 1 : 0)}%</strong></div><i><b style={{width:`${score}%`}} /></i><small>Pending review</small></div></article>; }
+function Matches({ status, retry }) { const [query,setQuery]=useState(""),[range,setRange]=useState("all"); const matches=useMemo(() => [...status.matches].filter(m => {let score=Number(m.score)||0,n=`${m.lostItem?.itemName||""} ${m.foundItem?.itemName||""}`.toLowerCase();return n.includes(query.toLowerCase()) && (range==="all" || (range==="high" ? score>=90 : score>=70&&score<90));}).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)),[status.matches,query,range]); return <main className="page container"><div className="intro matches-intro"><div><span className="eyebrow">Automated suggestions</span><h1>Possible matches</h1><p>These similarities are generated automatically and always need manual verification. A score is not proof of ownership.</p></div><div className="match-total"><b>{status.loading ? "—" : status.matches.length}</b><span>possible {status.matches.length===1?"match":"matches"}</span></div></div><div className="toolbar match-toolbar"><label className="search"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search by item name" /></label><div className="tabs score-tabs">{[["all","All matches"],["high","90–100%"],["medium","70–89%"]].map(([v,l])=><button key={v} className={range===v?"selected":""} onClick={()=>setRange(v)}>{l}</button>)}</div></div><p className="disclaimer">Matches are sorted by highest score. “Pending review” means no one has verified the match; “sent” only confirms a notification was sent.</p>{status.loading ? <Skeletons matches /> : status.error ? <Empty title="We couldn’t load possible matches" text="There was a problem reaching the matching service." action={<button className="button primary" onClick={retry}>Retry</button>} /> : matches.length ? <div className="match-list">{matches.map(m=><MatchCard match={m} key={m.matchId}/>)}</div> : <Empty title="No possible matches yet" text="When similar lost and found reports are detected, they’ll appear here for manual review." />}</main>; }
+
+export default function App() {
+  const [page,setPage]=useState("home"),[browseQuery,setBrowseQuery]=useState(""),[items,setItems]=useState([]),[itemsStatus,setItemsStatus]=useState({loading:true,error:"",matchCount:null}),[matches,setMatches]=useState({loading:true,error:"",matches:[]});
+  const navigate=(target,query)=>{if(target==="browse"&&query!==undefined)setBrowseQuery(query);setPage(target);};
+  const loadItems=async(signal)=>{setItemsStatus(s=>({...s,loading:true,error:""}));try{const data=await json(await fetch(ITEMS_URL,{method:"GET",signal}));if(!Array.isArray(data.items))throw new Error("Invalid API response");setItems(data.items.map(normalize));}catch(err){if(err.name!=="AbortError"){console.error("GET items error:",err);setItemsStatus(s=>({...s,error:"Unable to load items from AWS."}));}}finally{if(!signal?.aborted)setItemsStatus(s=>({...s,loading:false}));}};
+  const loadMatches=async(signal)=>{setMatches(s=>({...s,loading:true,error:""}));try{const data=await json(await fetch(MATCHES_URL,{method:"GET",signal}));if(!Array.isArray(data.matches))throw new Error("Invalid API response");setMatches({loading:false,error:"",matches:data.matches});setItemsStatus(s=>({...s,matchCount:typeof data.count==="number"?data.count:data.matches.length}));}catch(err){if(err.name!=="AbortError"){console.error("GET matches error:",err);setMatches(s=>({...s,loading:false,error:"Unable to load possible matches."}));}}};
+  // These asynchronous requests intentionally initialize the page's remote state on mount.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(()=>{const controller=new AbortController();loadItems(controller.signal);loadMatches(controller.signal);return()=>controller.abort();},[]);
+  const created=item=>setItems(all=>[item,...all.filter(x=>x.id!==item.id)]);
+  const content=page==="browse"?<Browse items={items} status={itemsStatus} retry={loadItems} startQuery={browseQuery}/>:page==="report"?<Report created={created}/>:page==="matches"?<Matches status={matches} retry={loadMatches}/>:<Home items={items} status={itemsStatus} navigate={navigate} retry={loadItems}/>;
+  return <div className="app"><Header page={page} navigate={navigate}/>{content}<Footer navigate={navigate}/></div>;
+}

@@ -1,16 +1,47 @@
-# React + Vite
+# FindBack
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+FindBack is a responsive campus lost-and-found frontend built with React and Vite. It uses the existing AWS API for item reports, presigned S3 image uploads, and automated possible-match suggestions.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+The app uses `https://ltayb90q72.execute-api.us-east-1.amazonaws.com` by default. To point at another compatible API without committing configuration, create a local `.env.local` file:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```
+VITE_API_BASE_URL=https://your-api.example.com
+```
 
-## Expanding the ESLint configuration
+## Production build
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm run build
+npm run preview
+```
+
+The generated static application is in `dist/`.
+
+## Manual AWS Amplify ZIP deployment
+
+1. Run `npm install && npm run build`.
+2. Zip the *contents* of `dist` (not the `dist` directory itself):
+
+   ```bash
+   cd dist
+   zip -r ../findback-amplify.zip .
+   cd ..
+   ```
+
+3. In AWS Amplify, choose the app and manual deployment flow, then upload `findback-amplify.zip`.
+
+No AWS credentials or secrets are required in the frontend build. The image upload path uses the backend-issued presigned POST fields.
+
+## Checks
+
+```bash
+npm run lint
+npm run build
+```
